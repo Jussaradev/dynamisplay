@@ -1,108 +1,95 @@
 const express = require('express');
-const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { OAuth2Client } = require('google-auth-library'); // <-- 1. Importar a biblioteca do Google
+const { OAuth2Client } = require('google-auth-library');
 const Usuario = require('../models/Usuario');
+const { gerarToken } = require('../middleware/auth');
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID); // <-- 2. Configurar o cliente com a variável do .env
+const router = express.Router();
+const googleClient = new OAuth2Client();
 
-// Rota de Cadastro (Register)
+// Monta a resposta padrão de login (token + dados públicos do usuário)
+function respostaLogin(usuario) {
+  return {
+    token: gerarToken(usuario),
+    usuario: { id: usuario._id, nome: usuario.nome, email: usuario.email, tipo: usuario.tipo }
+  };
+}
+
+// POST /api/auth/registro - cria conta com e-mail e senha
 router.post('/registro', async (req, res) => {
   try {
-    const { nome, email, senha, tipo } = req.body;
+    const { nome, email, senha } = req.body;
 
-    const usuarioExiste = await Usuario.findOne({ email });
+    if (!nome || !email || !senha) {
+      return res.status(400).json({ erro: 'Preencha nome, e-mail e senha.' });
+    }
+    if (senha.length < 6) {
+      return res.status(400).json({ erro: 'A senha precisa ter pelo menos 6 caracteres.' });
+    }
+
+    const usuarioExiste = await Usuario.findOne({ email: email.toLowerCase() });
     if (usuarioExiste) {
       return res.status(400).json({ erro: 'E-mail já cadastrado.' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const senhaHash = await bcrypt.hash(senha, salt);
+    const senhaHash = await bcrypt.hash(senha, 10); // nunca salvar a senha "pura"
+    const novoUsuario = await Usuario.create({ nome, email, senha: senhaHash, tipo: 'professor' });
 
-    const novoUsuario = new Usuario({
-      nome,
-      email,
-      senha: senhaHash,
-      tipo: tipo || 'professor'
-    });
-
-    await novoUsuario.save();
-    res.status(201).json({ mensagem: 'Usuário cadastrado com sucesso!' });
+    // Já devolve o token, assim o professor entra direto após se cadastrar
+    res.status(201).json(respostaLogin(novoUsuario));
   } catch (error) {
-    res.status(500).json({ erro: 'Erro ao cadastrar usuário', detalhe: error.message });
+    res.status(500).json({ erro: 'Erro ao cadastrar usuário.', detalhe: error.message });
   }
 });
 
-// Rota de Login Tradicional
+// POST /api/auth/login - entra com e-mail e senha
 router.post('/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
+    if (!email || !senha) {
+      return res.status(400).json({ erro: 'Informe e-mail e senha.' });
+    }
 
-    const usuario = await Usuario.findOne({ email });
-    if (!usuario) {
-      return res.status(400).json({ erro: 'Credenciais inválidas.' });
+    const usuario = await Usuario.findOne({ email: email.toLowerCase() });
+    // usuario.senha vazio = conta criada pelo Google
+    if (!usuario || !usuario.senha) {
+      return res.status(400).json({ erro: 'E-mail ou senha inválidos.' });
     }
 
     const senhaValida = await bcrypt.compare(senha, usuario.senha);
     if (!senhaValida) {
-      return res.status(400).json({ erro: 'Credenciais inválidas.' });
+      return res.status(400).json({ erro: 'E-mail ou senha inválidos.' });
     }
 
-    const token = jwt.sign(
-      { id: usuario._id, nome: usuario.nome, tipo: usuario.tipo },
-      process.env.JWT_SECRET || 'chave_secreta_dynamisplay',
-      { expiresIn: '1d' }
-    );
-
-    res.json({ token, usuario: { id: usuario._id, nome: usuario.nome, email: usuario.email, tipo: usuario.tipo } });
+    res.json(respostaLogin(usuario));
   } catch (error) {
-    res.status(500).json({ erro: 'Erro ao realizar login', detalhe: error.message });
+    res.status(500).json({ erro: 'Erro ao realizar login.', detalhe: error.message });
   }
 });
 
-// === 3. NOVA ROTA: Login com Google ===
+// POST /api/auth/google - entra com a conta Google (API externa do Google)
 router.post('/google', async (req, res) => {
   try {
     const { token } = req.body;
+    if (!token) return res.status(400).json({ erro: 'Token do Google não enviado.' });
 
-    // Valida o token enviado pelo frontend junto ao Google
-    const ticket = await client.verifyIdToken({
+    // Pergunta ao Google se o token é verdadeiro
+    const ticket = await googleClient.verifyIdToken({
       idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: process.env.GOOGLE_CLIENT_ID
     });
+    const { email, name } = ticket.getPayload();
 
-    const payload = ticket.getPayload();
-    const { email, name } = payload;
-
-    // Verifica se o usuário já existe no MongoDB
-    let usuario = await Usuario.findOne({ email });
-
+    let usuario = await Usuario.findOne({ email: email.toLowerCase() });
     if (!usuario) {
-      // Se for a primeira vez que entra com o Google, cria o usuário automaticamente
-      usuario = new Usuario({
-        nome: name,
-        email: email,
-        senha: '', // Sem senha tradicional necessária para contas Google
-        tipo: 'professor'
-      });
-      await usuario.save();
+      // Primeiro acesso: cria o professor automaticamente (sem senha)
+      usuario = await Usuario.create({ nome: name, email, tipo: 'professor' });
     }
 
-    // Gera o token JWT padrão da sua aplicação (igual ao login normal)
-    const jwtToken = jwt.sign(
-      { id: usuario._id, nome: usuario.nome, tipo: usuario.tipo },
-      process.env.JWT_SECRET || 'chave_secreta_dynamisplay',
-      { expiresIn: '1d' }
-    );
-
-    res.json({ 
-      token: jwtToken, 
-      usuario: { id: usuario._id, nome: usuario.nome, email: usuario.email, tipo: usuario.tipo } 
-    });
+    res.json(respostaLogin(usuario));
   } catch (error) {
-    console.error("Erro na autenticação Google:", error);
-    res.status(401).json({ erro: 'Falha ao autenticar com o Google. Verifique as credenciais.', detalhe: error.message });
+    console.error('Erro na autenticação Google:', error.message);
+    res.status(401).json({ erro: 'Falha ao autenticar com o Google.', detalhe: error.message });
   }
 });
 

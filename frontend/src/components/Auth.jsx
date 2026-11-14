@@ -1,117 +1,100 @@
-/* eslint-disable react-hooks/exhaustive-deps */
-import { useState, useEffect } from 'react';
-import axios from 'axios';
+// Auth.jsx - Tela de login / cadastro do professor (e-mail+senha ou Google).
+import { useState } from 'react';
+import { GoogleLogin } from '@react-oauth/google';
+import api, { mensagemDeErro } from '../api';
 
-const COR_AZUL = '#084C61';
-const COR_DOURADO = '#D4AF37';
-
-export default function Auth({ onLoginSucesso, onVoltarHome }) {
-  const [isLogin, setIsLogin] = useState(true);
+export default function Auth({ onLoginSucesso, onVoltar }) {
+  const [modoLogin, setModoLogin] = useState(true);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [erro, setErro] = useState('');
-
-  const handleGoogleResponse = async (response) => {
-    try {
-      const res = await axios.post('http://localhost:5000/api/auth/google', {
-        token: response.credential,
-      });
-
-      localStorage.setItem('token', res.data.token);
-      localStorage.setItem('usuario', JSON.stringify(res.data.usuario));
-      onLoginSucesso(res.data.usuario);
-    } catch (err) {
-      console.error('Erro no login com Google:', err);
-      setErro('Falha ao autenticar com o Google. Verifique as credenciais.');
-    }
-  };
-
-  useEffect(() => {
-    if (window.google) {
-      window.google.accounts.id.initialize({
-        client_id: "24689047961-dk24q8l2amlr3au8hcnc5s2v1vd1a0kt.apps.googleusercontent.com",
-        callback: handleGoogleResponse,
-      });
-
-      window.google.accounts.id.renderButton(
-        document.getElementById("googleButtonDiv"),
-        { theme: "outline", size: "large", width: "100%", text: "continue_with" }
-      );
-    }
-  }, []);
+  const [enviando, setEnviando] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErro('');
-
+    setEnviando(true);
     try {
-      const endpoint = isLogin ? 'login' : 'registro';
-      const payload = isLogin ? { email, senha } : { nome, email, senha };
-      
-      const res = await axios.post(`http://localhost:5000/api/auth/${endpoint}`, payload);
-      
-      localStorage.setItem('token', res.data.token);
-      localStorage.setItem('usuario', JSON.stringify(res.data.usuario));
-      onLoginSucesso(res.data.usuario);
+      const rota = modoLogin ? '/auth/login' : '/auth/registro';
+      const dados = modoLogin ? { email, senha } : { nome, email, senha };
+      const res = await api.post(rota, dados);
+      onLoginSucesso(res.data); // res.data = { token, usuario }
     } catch (err) {
-      setErro(err.response?.data?.mensagem || 'Ocorreu um erro. Tente novamente.');
+      setErro(mensagemDeErro(err));
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  // O Google devolve "credential" (um token). Mandamos para o nosso backend conferir.
+  const handleGoogle = async (resposta) => {
+    setErro('');
+    try {
+      const res = await api.post('/auth/google', { token: resposta.credential });
+      onLoginSucesso(res.data);
+    } catch (err) {
+      setErro(mensagemDeErro(err, 'Falha ao entrar com o Google.'));
     }
   };
 
   return (
-    <div style={{ maxWidth: '400px', margin: '60px auto', padding: '35px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
-      <button onClick={onVoltarHome} style={{ background: 'none', border: 'none', color: COR_AZUL, cursor: 'pointer', fontWeight: '600', marginBottom: '20px', padding: 0 }}>
-        ← Voltar para a Página Inicial
-      </button>
+    <section className="container estreito">
+      <button className="btn-link" onClick={onVoltar}>← Voltar para a página inicial</button>
 
-      <h2 style={{ color: COR_AZUL, marginTop: 0, textAlign: 'center' }}>
-        {isLogin ? '🔑 Entrar na Área do Professor' : '📝 Criar Conta de Professor'}
-      </h2>
+      <div className="cartao">
+        <h1 className="titulo-centro">{modoLogin ? '🔑 Entrar na Área do Professor' : '📝 Criar conta de Professor'}</h1>
 
-      {erro && (
-        <div role="alert" style={{ padding: '10px', marginBottom: '15px', backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: '6px', fontSize: '0.9rem', fontWeight: '500' }}>
-          {erro}
+        {erro && <div role="alert" className="alerta alerta-erro">{erro}</div>}
+
+        <div className="google">
+          <GoogleLogin
+            onSuccess={handleGoogle}
+            onError={() => setErro('Não foi possível entrar com o Google.')}
+            text="continue_with"
+            locale="pt-BR"
+          />
         </div>
-      )}
 
-      {/* Botão Oficial do Google */}
-      <div id="googleButtonDiv" style={{ width: '100%', marginBottom: '20px', display: 'flex', justifyContent: 'center' }}></div>
+        <div className="divisor"><span>ou com e-mail e senha</span></div>
 
-      <div style={{ display: 'flex', alignItems: 'center', textAlign: 'center', margin: '20px 0', color: '#94a3b8', fontSize: '0.9rem' }}>
-        <div style={{ flex: 1, borderBottom: '1px solid #e2e8f0' }}></div>
-        <span style={{ padding: '0 10px' }}>ou com e-mail e senha</span>
-        <div style={{ flex: 1, borderBottom: '1px solid #e2e8f0' }}></div>
-      </div>
+        <form onSubmit={handleSubmit} className="formulario">
+          {!modoLogin && (
+            <div className="campo">
+              <label htmlFor="nome">Nome completo</label>
+              <input id="nome" type="text" value={nome} onChange={(e) => setNome(e.target.value)} required autoComplete="name" />
+            </div>
+          )}
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        {!isLogin && (
-          <div>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: '600', color: COR_AZUL, fontSize: '0.9rem' }}>Nome Completo:</label>
-            <input type="text" value={nome} onChange={(e) => setNome(e.target.value)} required placeholder="Ex: Prof.ª Jussara" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
+          <div className="campo">
+            <label htmlFor="email">E-mail</label>
+            <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
           </div>
-        )}
 
-        <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '600', color: COR_AZUL, fontSize: '0.9rem' }}>E-mail:</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="exemplo@email.com" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
-        </div>
+          <div className="campo">
+            <label htmlFor="senha">Senha {!modoLogin && <small>(mínimo 6 caracteres)</small>}</label>
+            <input
+              id="senha"
+              type="password"
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              required
+              minLength={modoLogin ? undefined : 6}
+              autoComplete={modoLogin ? 'current-password' : 'new-password'}
+            />
+          </div>
 
-        <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: '600', color: COR_AZUL, fontSize: '0.9rem' }}>Palavra-passe:</label>
-          <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} required placeholder="••••••••" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
-        </div>
+          <button type="submit" className="btn btn-primario" disabled={enviando}>
+            {enviando ? 'Aguarde...' : modoLogin ? 'Entrar' : 'Criar conta'}
+          </button>
+        </form>
 
-        <button type="submit" style={{ padding: '12px', backgroundColor: COR_AZUL, color: 'white', border: `1px solid ${COR_DOURADO}`, borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', marginTop: '5px' }}>
-          {isLogin ? 'Entrar' : 'Registar Conta'}
-        </button>
-      </form>
-
-      <div style={{ textAlign: 'center', marginTop: '20px' }}>
-        <button onClick={() => setIsLogin(!isLogin)} style={{ background: 'none', border: 'none', color: COR_AZUL, cursor: 'pointer', fontSize: '0.9rem', textDecoration: 'underline' }}>
-          {isLogin ? 'Não tem conta? Registe-se aqui' : 'Já tem conta? Faça login'}
-        </button>
+        <p className="titulo-centro">
+          <button className="btn-link" onClick={() => { setModoLogin(!modoLogin); setErro(''); }}>
+            {modoLogin ? 'Não tem conta? Cadastre-se aqui' : 'Já tem conta? Faça login'}
+          </button>
+        </p>
       </div>
-    </div>
+    </section>
   );
 }

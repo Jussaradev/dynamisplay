@@ -1,242 +1,234 @@
-import { useState, useEffect } from 'react';
-import axios from 'axios';
-
-const COR_AZUL = '#084C61';
-const COR_DOURADO = '#D4AF37';
+// AlunoJogo.jsx - Tela do aluno: identifica, joga e vê o resultado.
+// O resultado é enviado para o backend e aparece nos Relatórios do professor.
+import { useEffect, useMemo, useRef, useState } from 'react';
+import api from '../api';
+import { TIPOS, embaralhar, verificarResposta } from '../utils/jogo';
+import JogoMemoria from './JogoMemoria';
 
 export default function AlunoJogo({ atividadeId, onVoltar }) {
   const [atividade, setAtividade] = useState(null);
-  const [nomeAluno, setNomeAluno] = useState('');
-  const [jogoIniciado, setJogoIniciado] = useState(false);
-  
-  // Respostas e feedback
-  const [respostaAluno, setRespostaAluno] = useState('');
-  const [feedback, setFeedback] = useState(null); // 'correto' ou 'incorreto'
   const [carregando, setCarregando] = useState(true);
+  const [nomeAluno, setNomeAluno] = useState('');
+  const [etapa, setEtapa] = useState('nome'); // 'nome' -> 'jogando' -> 'fim'
 
-  // Estado para Flashcards
-  const [cartaVirada, setCartaVirada] = useState(false);
+  const [indice, setIndice] = useState(0);        // item atual
+  const [resposta, setResposta] = useState('');
+  const [feedback, setFeedback] = useState(null); // null | 'correto' | 'incorreto'
+  const [escolhida, setEscolhida] = useState(null); // alternativa clicada no quiz
+  const [acertos, setAcertos] = useState(0);
+  const [placarFinal, setPlacarFinal] = useState(null);
+  const inicio = useRef(0);
 
   useEffect(() => {
-    const carregarAtividade = async () => {
-      try {
-        const res = await axios.get(`http://localhost:5000/api/atividades/${atividadeId}`);
-        setAtividade(res.data);
-      } catch (err) {
-        console.error('Erro ao carregar jogo:', err);
-      } finally {
-        setCarregando(false);
-      }
-    };
-    carregarAtividade();
+    api
+      .get(`/atividades/${atividadeId}`)
+      .then((res) => setAtividade(res.data))
+      .catch(() => setAtividade(null))
+      .finally(() => setCarregando(false));
   }, [atividadeId]);
 
-  const handleStartGame = (e) => {
+  const comecar = (e) => {
     e.preventDefault();
-    if (nomeAluno.trim() !== '') {
-      setJogoIniciado(true);
-    }
+    if (!nomeAluno.trim()) return;
+    inicio.current = Date.now();
+    setEtapa('jogando');
   };
 
-  const handleResponderQuiz = (e) => {
-    e.preventDefault();
-    if (!atividade || !atividade.conteudo || atividade.conteudo.length === 0) return;
-    
-    const item = atividade.conteudo[0];
-    const correta = String(item.respostaCorreta || '').trim().toLowerCase();
-    const dada = respostaAluno.trim().toLowerCase();
+  // Encerra o jogo e salva o resultado (se falhar, o aluno vê o placar mesmo assim)
+  const finalizar = (totalAcertos, total) => {
+    const tempoSegundos = Math.round((Date.now() - inicio.current) / 1000);
+    setPlacarFinal({ acertos: totalAcertos, total, tempoSegundos });
+    setEtapa('fim');
+    api
+      .post('/resultados', { atividadeId, nomeAluno, acertos: totalAcertos, total, tempoSegundos })
+      .catch((err) => console.error('Não foi possível salvar o resultado:', err));
+  };
 
-    if (dada === correta) {
-      setFeedback('correto');
+  const responder = (valor) => {
+    if (feedback) return; // já respondeu este item
+    const item = atividade.conteudo[indice];
+    const certo = verificarResposta(valor, item.respostaCorreta);
+    setEscolhida(valor);
+    setFeedback(certo ? 'correto' : 'incorreto');
+    if (certo) setAcertos((a) => a + 1);
+  };
+
+  const proximo = () => {
+    const ultimo = indice === atividade.conteudo.length - 1;
+    if (ultimo) {
+      finalizar(acertos, atividade.conteudo.length);
     } else {
-      setFeedback('incorreto');
+      setIndice(indice + 1);
+      setResposta('');
+      setFeedback(null);
+      setEscolhida(null);
     }
   };
 
-  const handleResponderVF = (escolha) => {
-    const item = atividade.conteudo[0];
-    if (escolha === item.respostaCorreta) {
-      setFeedback('correto');
-    } else {
-      setFeedback('incorreto');
-    }
+  const jogarDeNovo = () => {
+    setIndice(0); setResposta(''); setFeedback(null); setEscolhida(null); setAcertos(0); setPlacarFinal(null);
+    inicio.current = Date.now();
+    setEtapa('jogando');
   };
 
-  if (carregando) {
-    return (
-      <div style={{ textAlign: 'center', padding: '50px', color: COR_AZUL }} role="status">
-        <h2>A carregar o jogo... 🎮</h2>
-      </div>
-    );
-  }
+  // Alternativas do quiz embaralhadas (mudam só quando troca de pergunta)
+  const itemAtual = atividade?.conteudo?.[indice];
+  const alternativas = useMemo(
+    () => (itemAtual?.opcoes?.length ? embaralhar(itemAtual.opcoes) : []),
+    [itemAtual]
+  );
+
+  if (carregando) return <p className="container" role="status">Carregando o jogo... 🎮</p>;
 
   if (!atividade) {
     return (
-      <div style={{ textAlign: 'center', padding: '50px', color: '#ef4444' }}>
-        <h2>Atividade não encontrada.</h2>
-        <button onClick={onVoltar} style={{ marginTop: '15px', padding: '10px 20px', backgroundColor: COR_AZUL, color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
-          Voltar para a Lista
-        </button>
-      </div>
+      <section className="container estreito">
+        <div className="cartao titulo-centro">
+          <h1>Atividade não encontrada 😕</h1>
+          <button className="btn btn-primario" onClick={onVoltar}>Ver outras atividades</button>
+        </div>
+      </section>
     );
   }
 
-  // TELA 1: Identificação do Aluno (Nome / Apelido)
-  if (!jogoIniciado) {
+  const cabecalhoJogo = (
+    <div className="topo-jogo">
+      <button className="btn-link" onClick={onVoltar}>← Sair</button>
+      {etapa !== 'nome' && <span>Jogador(a): <strong>{nomeAluno}</strong></span>}
+    </div>
+  );
+
+  // ETAPA 1 - nome do aluno
+  if (etapa === 'nome') {
     return (
-      <div style={{ maxWidth: '480px', margin: '50px auto', padding: '35px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 15px rgba(0,0,0,0.05)', textAlign: 'center' }}>
-        <button onClick={onVoltar} aria-label="Voltar para a lista de atividades" style={{ background: 'none', border: 'none', color: COR_AZUL, marginBottom: '20px', cursor: 'pointer', fontWeight: '600', float: 'left' }}>
-          ← Voltar
-        </button>
-        <div style={{ clear: 'both' }} />
-
-        <span style={{ padding: '4px 12px', backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: '20px', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>
-          {atividade.tipo.replace('_', ' ')}
-        </span>
-        <h2 style={{ color: COR_AZUL, marginTop: '15px', marginBottom: '8px' }}>{atividade.titulo}</h2>
-        <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '25px' }}>Professor(a): {atividade.professor}</p>
-
-        <form onSubmit={handleStartGame} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <label htmlFor="input-apelido" style={{ fontWeight: '600', color: COR_AZUL, textAlign: 'left', fontSize: '0.95rem' }}>
-            Digite o seu nome ou apelido para jogar:
-          </label>
-          <input
-            id="input-apelido"
-            type="text"
-            value={nomeAluno}
-            onChange={(e) => setNomeAluno(e.target.value)}
-            required
-            placeholder="Ex: Ana Souza ou Aninha"
-            aria-label="Nome ou apelido do aluno"
-            style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '1rem' }}
-          />
-          <button type="submit" aria-label="Iniciar o desafio" style={{ padding: '12px', backgroundColor: COR_AZUL, color: '#fff', border: `1px solid ${COR_DOURADO}`, borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', marginTop: '10px' }}>
-            Iniciar Desafio 🚀
-          </button>
-        </form>
-      </div>
+      <section className="container estreito">
+        <div className="cartao">
+          {cabecalhoJogo}
+          <span className="etiqueta">{TIPOS[atividade.tipo]}</span>
+          <h1>{atividade.titulo}</h1>
+          <p className="detalhe">Professor(a): {atividade.professor}</p>
+          <form onSubmit={comecar} className="formulario">
+            <div className="campo">
+              <label htmlFor="apelido">Digite seu nome ou apelido</label>
+              <input id="apelido" value={nomeAluno} onChange={(e) => setNomeAluno(e.target.value)} required autoFocus />
+            </div>
+            <button type="submit" className="btn btn-primario">Começar 🚀</button>
+          </form>
+        </div>
+      </section>
     );
   }
 
-  // TELA 2: Execução do Jogo
-  const item = atividade.conteudo[0] || {};
+  // ETAPA 3 - fim de jogo
+  if (etapa === 'fim') {
+    const pct = Math.round((placarFinal.acertos / placarFinal.total) * 100);
+    return (
+      <section className="container estreito">
+        <div className="cartao titulo-centro" role="status" aria-live="polite">
+          <h1>{pct >= 70 ? '🏆 Mandou bem' : '💪 Boa tentativa'}, {nomeAluno}!</h1>
+          {atividade.tipo === 'cartas' ? (
+            <p className="placar">Você achou os {atividade.conteudo.length} pares em {placarFinal.total} tentativas.</p>
+          ) : (
+            <p className="placar">Você acertou {placarFinal.acertos} de {placarFinal.total} ({pct}%).</p>
+          )}
+          <p>Tempo: {placarFinal.tempoSegundos} segundos</p>
+          <div className="acoes centro">
+            <button className="btn btn-primario" onClick={jogarDeNovo}>Jogar de novo</button>
+            <button className="btn btn-secundario" onClick={onVoltar}>Outras atividades</button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // ETAPA 2 - jogando
+  if (atividade.tipo === 'cartas') {
+    return (
+      <section className="container">
+        <div className="cartao">
+          {cabecalhoJogo}
+          <h1>{atividade.titulo}</h1>
+          <JogoMemoria conteudo={atividade.conteudo} onFim={(tentativas) => finalizar(atividade.conteudo.length, tentativas)} />
+        </div>
+      </section>
+    );
+  }
+
+  const item = atividade.conteudo[indice];
+  const total = atividade.conteudo.length;
 
   return (
-    <div style={{ maxWidth: '650px', margin: '40px auto', padding: '30px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #f1f5f9', paddingBottom: '10px' }}>
-        <button onClick={onVoltar} aria-label="Sair da atividade" style={{ background: 'none', border: 'none', color: COR_AZUL, cursor: 'pointer', fontWeight: '600' }}>
-          ← Sair
-        </button>
-        <span style={{ fontSize: '0.9rem', color: '#475569', fontWeight: '600' }}>
-          Jogador: <strong style={{ color: COR_AZUL }}>{nomeAluno}</strong>
-        </span>
-      </div>
+    <section className="container estreito">
+      <div className="cartao">
+        {cabecalhoJogo}
+        <h1>{atividade.titulo}</h1>
+        <p className="detalhe" aria-live="polite">Item {indice + 1} de {total} · Acertos: {acertos}</p>
+        <progress value={indice + (feedback ? 1 : 0)} max={total} aria-label="Progresso na atividade" />
 
-      <div style={{ textAlign: 'center', marginBottom: '25px' }}>
-        <h3 style={{ color: COR_AZUL, margin: '0 0 5px 0' }}>{atividade.titulo}</h3>
-      </div>
+        {atividade.tipo === 'verdadeiro_falso' && (
+          <>
+            <p className="enunciado">"{item.pergunta}"</p>
+            <div className="acoes centro">
+              <button className="btn btn-verde" onClick={() => responder('verdadeiro')} disabled={!!feedback}>Verdadeiro</button>
+              <button className="btn btn-vermelho" onClick={() => responder('falso')} disabled={!!feedback}>Falso</button>
+            </div>
+          </>
+        )}
 
-      {/* FEEDBACK DE ACERTO / ERRO */}
-      {feedback && (
-        <div 
-          role="alert" 
-          aria-live="polite"
-          style={{ padding: '15px', marginBottom: '20px', backgroundColor: feedback === 'correto' ? '#dcfce7' : '#fee2e2', color: feedback === 'correto' ? '#166534' : '#991b1b', borderRadius: '8px', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem' }}
-        >
-          {feedback === 'correto' ? `🎉 Excelente, ${nomeAluno}! Resposta Correta!` : `❌ Ops, ${nomeAluno}! Resposta Incorreta. Tente novamente!`}
-        </div>
-      )}
+        {/* QUIZ DE MÚLTIPLA ESCOLHA: um botão para cada alternativa */}
+        {atividade.tipo === 'quiz' && alternativas.length > 0 && (
+          <>
+            <p className="enunciado" id="enunciado">{item.pergunta}</p>
+            <ul className="opcoes" aria-labelledby="enunciado">
+              {alternativas.map((opcao, p) => {
+                const ehCorreta = feedback && verificarResposta(opcao, item.respostaCorreta);
+                const errouEsta = feedback && opcao === escolhida && !ehCorreta;
+                return (
+                  <li key={opcao}>
+                    <button
+                      className={`opcao ${ehCorreta ? 'certa' : ''} ${errouEsta ? 'errada' : ''}`}
+                      onClick={() => responder(opcao)}
+                      disabled={!!feedback}
+                    >
+                      <span className="letra">{['A', 'B', 'C', 'D', 'E'][p]}</span> {opcao}
+                      {ehCorreta && ' ✔'}
+                      {errouEsta && ' ✘'}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
 
-      {/* QUIZ */}
-      {atividade.tipo === 'quiz' && (
-        <form onSubmit={handleResponderQuiz} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <p style={{ fontSize: '1.1rem', fontWeight: '600', color: '#1e293b' }}>Pergunta: {item.pergunta}</p>
-          <input 
-            type="text" 
-            value={respostaAluno} 
-            onChange={(e) => setRespostaAluno(e.target.value)} 
-            placeholder="Digite a sua resposta..." 
-            required 
-            aria-label="Sua resposta para a pergunta"
-            style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '1rem' }} 
-          />
-          <button type="submit" aria-label="Enviar resposta do quiz" style={{ padding: '12px', backgroundColor: COR_AZUL, color: '#fff', border: `1px solid ${COR_DOURADO}`, borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
-            Responder
-          </button>
-        </form>
-      )}
+        {/* RESPOSTA ESCRITA: palavra ausente (e quizzes antigos, sem alternativas) */}
+        {(atividade.tipo === 'palavra_ausente' || (atividade.tipo === 'quiz' && alternativas.length === 0)) && (
+          <form onSubmit={(e) => { e.preventDefault(); responder(resposta); }} className="formulario">
+            <p className="enunciado">
+              {atividade.tipo === 'palavra_ausente' ? `Complete: "${item.pergunta}"` : item.pergunta}
+            </p>
+            <div className="campo">
+              <label htmlFor="resposta">Sua resposta</label>
+              <input id="resposta" value={resposta} onChange={(e) => setResposta(e.target.value)} required disabled={!!feedback} autoFocus />
+            </div>
+            {!feedback && <button type="submit" className="btn btn-primario">Responder</button>}
+          </form>
+        )}
 
-      {/* VERDADEIRO OU FALSO */}
-      {atividade.tipo === 'verdadeiro_falso' && (
-        <div style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '1.1rem', fontWeight: '600', color: '#1e293b', marginBottom: '25px' }}>Afirmação: "{item.afirmacao}"</p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '20px' }}>
-            <button onClick={() => handleResponderVF(true)} aria-label="Responder Verdadeiro" style={{ padding: '14px 28px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
-              Verdadeiro
-            </button>
-            <button onClick={() => handleResponderVF(false)} aria-label="Responder Falso" style={{ padding: '14px 28px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
-              Falso
-            </button>
+        {/* role="alert" faz o leitor de tela anunciar o resultado */}
+        {feedback && (
+          <div role="alert" className={`alerta ${feedback === 'correto' ? 'alerta-ok' : 'alerta-erro'}`}>
+            {feedback === 'correto'
+              ? '🎉 Resposta correta!'
+              : `❌ Não foi dessa vez. Resposta certa: ${item.respostaCorreta}`}
           </div>
-        </div>
-      )}
-
-      {/* FLASHCARDS */}
-      {atividade.tipo === 'cartas' && (
-        <div style={{ textAlign: 'center' }}>
-          <div 
-            onClick={() => setCartaVirada(!cartaVirada)}
-            role="button"
-            tabIndex={0}
-            aria-label="Virar a carta de estudo"
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setCartaVirada(!cartaVirada); }}
-            style={{ 
-              backgroundColor: cartaVirada ? '#f8fafc' : COR_AZUL, 
-              color: cartaVirada ? COR_AZUL : '#fff', 
-              padding: '40px 20px', 
-              borderRadius: '12px', 
-              cursor: 'pointer', 
-              minHeight: '150px', 
-              display: 'flex', 
-              flexDirection: 'column', 
-              justifyContent: 'center', 
-              alignItems: 'center',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              transition: 'all 0.3s'
-            }}
-          >
-            <span style={{ fontSize: '0.8rem', textTransform: 'uppercase', marginBottom: '10px', opacity: 0.8 }}>
-              {cartaVirada ? 'Verso (Definição)' : 'Frente (Termo)'}
-            </span>
-            <h3 style={{ fontSize: '1.3rem', margin: 0 }}>
-              {cartaVirada ? item.definicao : item.termo}
-            </h3>
-          </div>
-          <p style={{ marginTop: '15px', color: '#64748b', fontSize: '0.9rem' }}>👆 Clique na carta (ou pressione Enter) para virar.</p>
-        </div>
-      )}
-
-      {/* PALAVRA AUSENTE */}
-      {atividade.tipo === 'palavra_ausente' && (
-        <form onSubmit={handleResponderQuiz} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <p style={{ fontSize: '1.1rem', fontWeight: '600', color: '#1e293b' }}>Complete a frase:</p>
-          <p style={{ fontSize: '1.2rem', fontStyle: 'italic', color: COR_AZUL, backgroundColor: '#f1f5f9', padding: '15px', borderRadius: '8px' }}>
-            "{item.frase}"
-          </p>
-          <input 
-            type="text" 
-            value={respostaAluno} 
-            onChange={(e) => setRespostaAluno(e.target.value)} 
-            placeholder="Digite a palavra ausente..." 
-            required 
-            aria-label="Palavra para preencher a lacuna"
-            style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '1rem' }} 
-          />
-          <button type="submit" aria-label="Verificar palavra informada" style={{ padding: '12px', backgroundColor: COR_AZUL, color: '#fff', border: `1px solid ${COR_DOURADO}`, borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
-            Verificar Resposta
+        )}
+        {feedback && (
+          <button className="btn btn-primario" onClick={proximo} autoFocus>
+            {indice === total - 1 ? 'Ver resultado' : 'Próximo →'}
           </button>
-        </form>
-      )}
-    </div>
+        )}
+      </div>
+    </section>
   );
 }
