@@ -90,6 +90,32 @@ describe('Atividades', () => {
     expect(res.body.professorId).toBe(professor._id);
   });
 
+  test('quiz com menos de 3 alternativas é recusado', async () => {
+    const res = await request(app)
+      .post('/api/atividades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ titulo: 'Quiz', tipo: 'quiz', conteudo: [{ pergunta: 'RH?', opcoes: ['A', 'B'], respostaCorreta: 'A' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.erro).toMatch(/3 alternativas/);
+  });
+
+  test('quiz com resposta correta fora das alternativas é recusado', async () => {
+    const res = await request(app)
+      .post('/api/atividades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ titulo: 'Quiz', tipo: 'quiz', conteudo: [{ pergunta: 'RH?', opcoes: ['A', 'B', 'C'], respostaCorreta: 'D' }] });
+    expect(res.status).toBe(400);
+  });
+
+  test('quiz com 3 alternativas e a correta marcada é aceito', async () => {
+    Atividade.create.mockImplementation(async (dados) => ({ _id: 'q1', ...dados }));
+    const res = await request(app)
+      .post('/api/atividades')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ titulo: 'Quiz', tipo: 'quiz', conteudo: [{ pergunta: 'RH?', opcoes: ['Recursos Humanos', 'Renda', 'Rede'], respostaCorreta: 'Recursos Humanos' }] });
+    expect(res.status).toBe(201);
+  });
+
   test('id inválido responde 404', async () => {
     const res = await request(app).get('/api/atividades/abc');
     expect(res.status).toBe(404);
